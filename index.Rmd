@@ -1,0 +1,274 @@
+---
+title: 'Project 2: Data Mining, Classification, Prediction'
+author: "SDS322E"
+date: ''
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, fig.align = "center", warning = F, message = F,
+tidy=TRUE, tidy.opts=list(width.cutoff=60), R.options=list(max.print=100))
+
+class_diag <- function(score, truth, positive, cutoff=.5){
+
+  pred <- factor(score>cutoff,levels=c("TRUE","FALSE"))
+  truth <- factor(truth==positive, levels=c("TRUE","FALSE"))
+
+  tab<-table(truth, pred)
+  acc=sum(diag(tab))/sum(tab)
+  sens=tab[1,1]/rowSums(tab)[1]
+  spec=tab[2,2]/rowSums(tab)[2]
+  ppv=tab[1,1]/colSums(tab)[1]
+
+#CALCULATE F1
+  f1=2*(sens*ppv)/(sens+ppv)
+  
+#CALCULATE EXACT AUC
+  truth<-as.numeric(truth=="TRUE")
+  ord<-order(score, decreasing=TRUE)
+  score <- score[ord]; truth <- truth[ord]
+  TPR=cumsum(truth)/max(1,sum(truth))
+  FPR=cumsum(!truth)/max(1,sum(!truth))
+  dup<-c(score[-1]>=score[-length(score)], FALSE)
+  TPR<-c(0,TPR[!dup],1); FPR<-c(0,FPR[!dup],1)
+  n <- length(TPR)
+  auc<- sum( ((TPR[-1]+TPR[-n])/2) * (FPR[-1]-FPR[-n]) )
+  round(data.frame(acc,sens,spec,ppv,f1,ba=(sens+spec)/2,auc, row.names = "Metrics"),4)
+}
+```
+
+# Mining, Classification, Prediction
+
+Cameron Dang
+
+### Introduction 
+
+Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+
+```{R}
+library(tidyverse)
+# reading in raw data
+data_raw <- read_csv("~/Documents/Fall 2021/SDS322E/project2/openpowerlifting.csv")
+
+# modifying data for project
+data = data_raw %>% filter(Equipment == "Raw") %>% select(Name,Sex,Age,Date,BodyweightKg,Best3SquatKg,Best3BenchKg,Best3DeadliftKg,TotalKg,Wilks) %>% na.omit()
+
+# dichotimization of Sex variable
+binary = data$Sex %>% str_replace("M","1") %>% str_replace("F","0") %>% as.numeric()
+data = data %>% mutate(Sex=binary)
+
+# observations total
+# data %>% dim()
+
+# reducing number of observations
+set.seed(123)
+data <- data[sample(1:nrow(data), 10000), ]
+
+# checking observations per binary group
+# data %>% group_by(Sex) %>% summarize(n=n())
+```
+I decided to use a powerlifting dataset sourced from https://www.kaggle.com/open-powerlifting/powerlifting-database. This contains data from OpenPowerlifting, which is a public archive of powerlifting history. Each observation is an instance of a powerlifting meet, so it is important to note that the same lifter can have multiple observations. Since the dataset has so many variables, I used dplyr to select only the variables Name, Sex, Age, Date, BodyweightKg, Best3SquatKg, Best3BenchKg, Best3DeadliftKg, TotalKg, and Wilks. The Age variable was dichotomized using dplyr functions; 1 denotes male and 0 denotes female. Also, I only kept observations of raw meets. In a raw powerlifting meet, lifters can not use the assistance of certain equipment such as knee wraps. Rows with NAs were removed, which left 209,984 observations and 10 columns. I took a random sample of 10,000 observations because I had memory issues with the full dataset. In this sample, there were 3468 female observations and 6532 male observations. In powerlifting, the three competition movements are the squat, bench press, and deadlift. Powerlifting meets vary on which movements they test, but this dataset was modified to only retain observations in which all three lifts were performed. Lifters get three attempts per movement. The Best3SquatKg, Best3BenchKg, and Best3DeadliftKg numeric variables indicate the heaviest weight performed out of the three attempts. The numeric variable TotalKg is the sum of these three values. The numeric variable Wilks is a score used to compare powerlifters' strength between weight classes. In other words, it's a standardized strength score. I chose this dataset because I am passionate about weight lifting, so I thought it would be interesting to explore trends in powerlifting data.
+
+Update: The original csv file was around 240 megabytes, so it could not be pushed to github. I also ran into issues pushing a compressed version of the file. Please download it from https://www.kaggle.com/open-powerlifting/powerlifting-database if needed.
+
+### Cluster Analysis
+
+```{R}
+library(cluster)
+# defining clust_dat
+clust_dat = data %>% select(BodyweightKg,Best3SquatKg,Best3DeadliftKg,Best3BenchKg)
+
+# computing silhouette widths
+sil_width<-vector() #empty vector to hold mean sil width
+for(i in 2:10){  
+  kms <- kmeans(clust_dat,centers=i) #compute k-means solution for each k
+  sil <- silhouette(kms$cluster,dist(clust_dat)) #get sil widths
+  sil_width[i]<-mean(sil[,3]) #take averages (higher is better)
+}
+ggplot()+geom_line(aes(x=1:10,y=sil_width))+scale_x_continuous(name="k",breaks=1:10)
+
+# PAM
+set.seed(123)
+pam1 <- clust_dat %>% pam(k=2)
+pam1
+
+# visualize
+cluster = as.factor(pam1$clustering)
+library(GGally)
+ggpairs(clust_dat, aes(color=cluster))
+
+# goodness-of-fit
+pam1$silinfo$avg.width
+
+# how well did it classify by Sex?
+# changing back to M/F so less confusing
+factor = data$Sex %>% str_replace("1","M") %>% str_replace("0","F")
+data%>%mutate(Sex=factor) %>% mutate(cluster=cluster)%>%select(cluster,Sex)%>%
+  group_by(cluster,Sex)%>%summarize(n=n())%>%mutate(prop=n/sum(n,na.rm=T))%>%
+  pivot_wider(-n,names_from=Sex,values_from=prop)
+```
+
+I did not scale the numeric variables because they were all in kilograms. I found that the silihouette width was maximized with k = 2, so I ran PAM clustering with k = 2. For goodness-of-fit analysis, I found that the average silhouette width was 0.540263. This indicates that a reasonable structure has been found. We can see in the ggpairs plot that the numeric variables tend to have a linear relationship. For the strength variables, the clusters tend to split the datapoints in a manner resembling the function y = -x. In other words, there is a strong group and there is a weak group. However, it is interesting to note that these clusters don't seem as well defined between bodyweight and strength variables. For these, there is less of a linear relationship and more of a hamburger shape. The clusters split the datapoints horizontally. Again, this indicates a strong group and a weak group. However, there is a large amount of overlap in bodyweights between the two groups. Bodyweight also has a weaker correlation with each strength variable than the strength variables have with each other. I suspected that the clusters may correlate with the Sex variable. We can see that cluster 1 has 97.58% male lifters and 2.42% female lifters, while cluster 2 has 25.79% male lifters and 74.21% female lifters. I find this interesting because it reflects a real-world observation. I recall that Longhorn powerlifting's tryouts had weight classes for male lifters, but men and women were grouped together below a certain weight. I don't know the reasoning for this, but I find it interesting, regardless.
+    
+    
+### Dimensionality Reduction with PCA
+
+```{R}
+# prepare data 
+data_nums = data %>% select_if(is.numeric) %>% select(-1) %>% scale
+rownames(data_nums) = data$Name
+
+# run PCA
+data_pca = princomp(data_nums)
+summary(data_pca,loadings=T)
+
+# how many PCs to keep
+eigval = data_pca$sdev^2
+round(cumsum(eigval)/sum(eigval), 2)
+
+# visualize
+datadf<-data.frame(Name=data$Name, PC1=data_pca$scores[, 1],PC2=data_pca$scores[, 2])
+ggplot(datadf, aes(PC1, PC2)) + geom_point()
+```
+
+I first prepared data by selecting the Age, BodyweightKg, Best3SquatKg, Best3BenchKg, Best3DeadliftKg, TotalKg, and Wilks variables and scaling them. I ran the PCA using the princomp function. PC1 is a weakness axis. It has negative loadings for bodyweight and strength variables such as bench press strength and Wilks score. Scoring high on PC1 indicates low values for bodyweight, squat/bench/deadlift performance, total, and Wilks score. Scoring low on PC1 indicates high values for bodyweight, squat/bench/deadlift performance, total, and Wilks score. PC2 is an experience axis. It has a high positive loading for age, a lower positive loading for bodyweight, and a negative loading for Wilks score. Scoring high on PC2 indicates high values for age and bodyweight and a low Wilks score. Scoring low on PC2 indicates low values for age and bodyweight and a high Wilks score. Although powerlifters do increase their Wilks scores over the course of their careers, it makes sense that they tend to gain bodyweight and lose strength after their peak performance. Two principal components were retained because they explained 85% of the cumulative variance. Unfortunately, the plot looks like a huge blob overall. However, there are some interesting trends at the extremes. The datapoints scoring the highest on PC2 tend to also score high on PC1. This indicates that older powerlifters tend to be weaker. Also, the datapoints scoring lowest on PC2 tend to also score high on PC1. This indicates that younger powerlifters tend to be weaker. These results make sense since powerlifters tend to reach peak performance at some midpoint in their careers. This fact is also reflected in the datapoints scoring the lowest on PC1, which seem to group in a narrow range of PC2 values. This indicates that the strongest lifters tend to have a similar amount of experience.  
+
+###  Linear Classifier
+
+```{R}
+# preparing data
+data_fit = data %>% select(Sex,Age,BodyweightKg,Best3SquatKg,Best3BenchKg,Best3DeadliftKg,TotalKg,Wilks)
+
+# logistic regression
+fit = glm(Sex ~ .,data=data_fit,family="binomial")
+score = predict(fit,type="response")
+
+# in-sample performance
+class_diag(score,truth=data$Sex, positive=1)
+
+# confusion matrix
+table(Sex = data_fit$Sex, predictions = score>.5)
+```
+
+```{R}
+set.seed(123)
+k=10
+data1<-data_fit[sample(nrow(data_fit)),]
+folds<-cut(seq(1:nrow(data_fit)),breaks=k,labels=F)
+
+diags<-NULL
+for(i in 1:k){
+  ## Create training and test sets
+  train<-data1[folds!=i,] 
+  test<-data1[folds==i,]
+  truth<-test$Sex ## Truth labels for fold i
+  ## Train model on training set (all but fold i)
+  fit<-glm(Sex~.,data=train,family="binomial")
+  ## Test model on test set (fold i) 
+  probs<-predict(fit,newdata = test,type="response")
+  ## Get diagnostics for fold i
+  diags<-rbind(diags,class_diag(probs,truth, positive=1))
+}
+diags %>% summarize_all(mean)
+```
+
+I decided to predict the binary variable Sex using the numeric variables Age, BodyweightKg, Best3SquatKg, Best3BenchKg, Best3DeadliftKg, TotalKg, and Wilks. I used logistic regression. In-sample performance was very high on all metrics. Notably, it had an accuracy of 0.9974, sensitivity of 0.9971, and AUC of 0.9995. I computed 10-fold cross validation to test its out-sample performance. The accuracy was not changed. The sensitivity decreased to 0.99708 and the AUC decreased to 0.99945. These are tiny differences so there are no signs of overfitting. 
+
+### Non-Parametric Classifier
+
+```{R}
+library(caret)
+knn_fit <- knn3(factor(Sex==1,levels=c("TRUE","FALSE")) ~ ., data=data_fit, k=5)
+y_hat_knn <- predict(knn_fit,data_fit)
+class_diag(y_hat_knn[,1],data_fit$Sex, positive=1)
+```
+
+```{R}
+set.seed(123)
+k=10
+data1<-data_fit[sample(nrow(data_fit)),]
+folds<-cut(seq(1:nrow(data_fit)),breaks=k,labels=F)
+
+diags<-NULL
+for(i in 1:k){
+  ## Create training and test sets
+  train<-data1[folds!=i,] 
+  test<-data1[folds==i,]
+  truth<-test$Sex ## Truth labels for fold i
+  ## Train model on training set (all but fold i)
+  fit<-knn3(Sex~.,data=train)
+  ## Test model on test set (fold i) 
+  probs<-predict(fit,newdata = test)[,2]
+  ## Get diagnostics for fold i
+  diags<-rbind(diags,class_diag(probs,truth, positive=1))
+}
+diags %>% summarize_all(mean)
+```
+
+I used the same dataset, data_fit, as for the linear classifier. The binary variable Sex was predicted using the numeric variables Age, BodyweightKg, Best3SquatKg, Best3BenchKg, Best3DeadliftKg, TotalKg, and Wilks. I used a k-nearest-neighbors with k = 5. The value of k was chosen arbitrarily. It returned a perfect AUC of 1. It also had a very large accuracy and sensitivity of 0.9955 and 0.9945, respectively. I computed 10-fold cross-validation using k-nearest-neighbors. The AUC decreased from 1 to 0.99863. The accuracy and sensitivity decreased to 0.9935 and 0.99217, respectively. Similarly to linear cross-validation, there was a very marginal decrease. However, the linear model had better cross-validation performance than the non-parametric model. The former had a difference in AUC of 10^-5 and the latter had a difference in AUC of 10^-3. There were no signs of overfitting.
+
+
+### Regression/Numeric Prediction
+
+```{R}
+# fit linear regression
+fit<-lm(Best3DeadliftKg~Best3BenchKg+Best3SquatKg+BodyweightKg,data=data_fit)
+yhat<-predict(fit)
+# calculate MSE
+mean((data_fit$Best3DeadliftKg-yhat)^2)
+```
+
+```{R}
+set.seed(123)
+k = 10
+data1<-data_fit[sample(nrow(data_fit)),]
+folds<-cut(seq(1:nrow(data_fit)),breaks=k,labels=F)
+
+diags<-NULL
+for(i in 1:k){
+  ## Create training and test sets
+  train<-data1[folds!=i,] 
+  test<-data1[folds==i,]
+  
+  ## Train model on training set (all but fold i)
+  fit<-lm(Best3DeadliftKg~Best3BenchKg+Best3SquatKg+BodyweightKg,data=train)
+  ## Test model on test set (fold i) 
+  yhat<-predict(fit,newdata=test)
+  ## Get diagnostics for fold i
+  diags<-mean((test$Best3DeadliftKg-yhat)^2)
+}
+# average MSE
+mean(diags)
+```
+
+Again, the data_fit dataset was used. The Best3DeadliftKg numeric variable was predicted from the Best3BenchKg, Best3SquatKg, and BodyweightKg numeric variables. The in-sample MSE for linear regression was 681.9441. I computed 10-fold cross-validation using linear regression. The average MSE was 424.5941. Therefore, there were no signs of overfitting. In fact, the linear regression model performed better out-sample than in-sample.
+
+### Python 
+
+```{R}
+library(reticulate)
+data %>% arrange(-TotalKg) %>% head -> strongest_lifters
+strongest_lifters = strongest_lifters$Name
+```
+
+```{python}
+print(r.strongest_lifters)
+type(r.strongest_lifters)
+```
+
+I used dplyr to arrange the dataframe from strongest lifters to weakest lifters, using TotalKg as the metric for strength. I used the head function to retain the six strongest observations. I extracted the Name column and saved it as the strongest_lifters variable. I then printed it using python and checked the type of the object to verify it was a list. I primarily wanted to mess around with converting a column from a tidy dataframe in R to a list in python.
+
+### Concluding Remarks
+
+As a lifter, I found the results very interesting because they often reflected personal observations. For example, I touched on the Longhorn powerlifting observation in the clustering section. I will have to do more research to find an explanation. Also, I have observed that female lifters tend to have weaker bench presses relative to their squats and deadlifts than male lifters do. I believe that this metric is what allowed for such high AUCs in the linear and non-parametric classification and cross-validation. In the future, I would like to rerun this section without including Best3BenchKg. There were some unexpected results, however. Primarily, I was surprised by how PC1 and PC2 were defined. They made sense in hindsight, but I would have never expected experience to be such an important factor in explaining variation in powerlifters. Lastly, I was surprised by the large MSE when predicting deadlift performance from bench press and squat performance and bodyweight. This may suggest that there are more important variables that determine deadlift performance. I theorize that one of these is the anthropometry of the individual, which would be difficult to measure.
+
+
+
+
