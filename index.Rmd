@@ -158,6 +158,7 @@ table(Sex = data_fit$Sex, predictions = score>.5)
 ```
 
 ```{R}
+# cross-validation with logistic regression
 set.seed(123)
 k=10
 data1<-data_fit[sample(nrow(data_fit)),]
@@ -185,9 +186,16 @@ I decided to predict the binary variable Sex using the numeric variables Age, Bo
 
 ```{R}
 library(caret)
+
+# knn model
 knn_fit <- knn3(factor(Sex==1,levels=c("TRUE","FALSE")) ~ ., data=data_fit, k=5)
 y_hat_knn <- predict(knn_fit,data_fit)
+
+# in-sample performance
 class_diag(y_hat_knn[,1],data_fit$Sex, positive=1)
+
+# confusion matrix
+table(Sex = data_fit$Sex, predictions = y_hat_knn[,1]>.5)
 ```
 
 ```{R}

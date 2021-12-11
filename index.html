@@ -419,7 +419,8 @@ table(Sex = data_fit$Sex, predictions = score &gt; 0.5)</code></pre>
 ## Sex FALSE TRUE
 ##   0  3461    7
 ##   1    19 6513</code></pre>
-<pre class="r"><code>set.seed(123)
+<pre class="r"><code># cross-validation with logistic regression
+set.seed(123)
 k = 10
 data1 &lt;- data_fit[sample(nrow(data_fit)), ]
 folds &lt;- cut(seq(1:nrow(data_fit)), breaks = k, labels = F)
@@ -446,12 +447,22 @@ diags %&gt;%
 <div id="non-parametric-classifier" class="section level3">
 <h3>Non-Parametric Classifier</h3>
 <pre class="r"><code>library(caret)
+
+# knn model
 knn_fit &lt;- knn3(factor(Sex == 1, levels = c(&quot;TRUE&quot;, &quot;FALSE&quot;)) ~
     ., data = data_fit, k = 5)
 y_hat_knn &lt;- predict(knn_fit, data_fit)
+
+# in-sample performance
 class_diag(y_hat_knn[, 1], data_fit$Sex, positive = 1)</code></pre>
 <pre><code>##            acc   sens   spec    ppv     f1     ba auc
 ## Metrics 0.9955 0.9945 0.9974 0.9986 0.9965 0.9959   1</code></pre>
+<pre class="r"><code># confusion matrix
+table(Sex = data_fit$Sex, predictions = y_hat_knn[, 1] &gt; 0.5)</code></pre>
+<pre><code>##    predictions
+## Sex FALSE TRUE
+##   0  3459    9
+##   1    36 6496</code></pre>
 <pre class="r"><code>set.seed(123)
 k = 10
 data1 &lt;- data_fit[sample(nrow(data_fit)), ]
